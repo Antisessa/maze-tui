@@ -1,12 +1,12 @@
 package models
 
 import (
-	"charm.land/bubbles/v2/filepicker"
 	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"maze/internal/domain"
-	"maze/internal/service"
-	"os"
+	"maze/internal/models/generator"
+	"maze/internal/models/opener"
+	"path/filepath"
 	"strings"
 )
 
@@ -14,71 +14,34 @@ type State int
 
 const (
 	Start State = iota
-	FilePicker
+	OpenMazeScreen
+	GenerateMazeScreen
 	FileLoading
 	MazeLoaded
 )
 
-type mazeLoadedMsg struct {
-	Path  string
-	Board domain.Board
-}
-
-type mazeLoadErrMsg struct {
-	Path string
-	Err  error
-}
-
-func openMazeCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		board, err := service.Open(path)
-		if err != nil {
-			return mazeLoadErrMsg{
-				Path: path,
-				Err:  err,
-			}
-		}
-
-		return mazeLoadedMsg{
-			Path:  path,
-			Board: board,
-		}
-	}
-}
-
 type Model struct {
-	Maze   *domain.Board
-	State  State
-	Picker filepicker.Model
-	Err    error
+	State State
+
+	Maze *domain.Board
+	Err  error
 
 	Width, Height int
 
-	StartDir     string
 	SelectedFile string
+	StartDir     string
+
+	Open *opener.Model
+	Gen  *generator.Model
 }
 
-func InitModel() *Model {
-	model := &Model{
-		Maze:  nil,
-		State: Start,
+func InitModel(startDir string) *Model {
+	return &Model{
+		State:    Start,
+		StartDir: startDir,
+		Open:     opener.NewModel(startDir),
+		Gen:      generator.NewModel(startDir),
 	}
-
-	wd, err := os.Getwd()
-	if err == nil {
-		model.StartDir = wd
-	}
-
-	fp := filepicker.New()
-	fp.CurrentDirectory = model.StartDir
-	fp.FileAllowed = true
-	fp.DirAllowed = false
-	fp.ShowPermissions = true
-	fp.ShowSize = true
-
-	model.Picker = fp
-
-	return model
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -87,79 +50,95 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-
-	// Update размера терминала
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
 
-		// Оставляем место под заголовок и подсказки
-		h := max(msg.Height-6, 5)
-
-		m.Picker.SetHeight(h)
-		m.Picker.ShowPermissions = msg.Width >= 70
-		m.Picker.ShowSize = msg.Width >= 45
+		if m.Open != nil {
+			m.Open.SetSize(msg.Width, msg.Height)
+		}
+		if m.Gen != nil {
+			m.Gen.SetSize(msg.Width, msg.Height)
+		}
 		return m, nil
 
-	case mazeLoadedMsg:
+	case opener.OpenMazeSelectedMsg:
+		m.Err = nil
+		m.SelectedFile = msg.Path
+		m.State = FileLoading
+		return m, opener.OpenMazeCmd(msg.Path)
+
+	case opener.OpenMazeCanceledMsg:
+		m.State = Start
+		return m, nil
+
+	case generator.GenerateCanceledMsg:
+		m.State = Start
+		return m, nil
+
+	case generator.GenerateSubmitMsg:
+		fullPath := filepath.Join(msg.Dir, msg.Name)
+		m.SelectedFile = fullPath
+		m.State = FileLoading
+		m.Err = nil
+		return m, generator.GenerateMazeCmd(fullPath, msg.Width, msg.Height)
+
+	case opener.MazeLoadedMsg:
 		m.Maze = &msg.Board
 		m.SelectedFile = msg.Path
 		m.State = MazeLoaded
 		m.Err = nil
 		return m, nil
 
-	case mazeLoadErrMsg:
+	case opener.MazeLoadErrMsg:
 		m.Err = fmt.Errorf("ошибка чтения файла %s: %w", msg.Path, msg.Err)
-		m.SelectedFile = msg.Path
-		m.State = FilePicker
+		m.State = OpenMazeScreen
 		return m, nil
 
-	// Key pressed
-	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "r":
-			if m.State == FilePicker {
-				m.Err = nil
-				m.Picker.CurrentDirectory = m.StartDir
-				return m, m.Picker.Init()
-			}
-		case "o", "щ", "ctrl+o":
-			m.State = FilePicker
-			m.Err = nil
-			return m, m.Picker.Init()
+	case generator.MazeGeneratedMsg:
+		// при желании можно сразу открыть сгенерированный файл:
+		m.SelectedFile = msg.Path
+		m.State = FileLoading
+		return m, opener.OpenMazeCmd(msg.Path)
 
-		case "esc":
-			if m.State == FilePicker {
-				m.State = Start
-				return m, nil
-			} else if m.State == MazeLoaded {
-				m.State = FilePicker
-				m.SelectedFile = ""
-				return m, nil
-			}
+	case generator.MazeGenerateErrMsg:
+		m.Err = fmt.Errorf("ошибка генерации файла %s: %w", msg.Path, msg.Err)
+		m.State = GenerateMazeScreen
+		return m, nil
+	}
+
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
 		case "q", "й", "ctrl+c":
 			return m, tea.Quit
+
+		case "o", "щ", "ctrl+o":
+			m.Err = nil
+			m.Open = opener.NewModel(m.StartDir)
+			m.Open.SetSize(m.Width, m.Height)
+			m.State = OpenMazeScreen
+			return m, m.Open.Init()
+
+		case "g", "п":
+			m.Err = nil
+			m.Gen = generator.NewModel(m.StartDir)
+			m.Gen.SetSize(m.Width, m.Height)
+			m.State = GenerateMazeScreen
+			return m, m.Gen.Init()
+
+		case "esc":
+			if m.State == MazeLoaded {
+				m.State = Start
+				return m, nil
+			}
 		}
 	}
 
-	// Пока открыт file-picker, все сообщения нужно отдавать ему
-	if m.State == FilePicker {
-		var cmd tea.Cmd
-		m.Picker, cmd = m.Picker.Update(msg)
-
-		if ok, path := m.Picker.DidSelectDisabledFile(msg); ok {
-			m.Err = fmt.Errorf("нельзя выбрать файл: %s", path)
-			return m, cmd
-		}
-
-		if ok, path := m.Picker.DidSelectFile(msg); ok {
-			m.SelectedFile = path
-			m.State = FileLoading
-			m.Err = nil
-			return m, openMazeCmd(path)
-		}
-
-		return m, cmd
+	switch m.State {
+	case OpenMazeScreen:
+		return m, m.Open.Update(msg)
+	case GenerateMazeScreen:
+		return m, m.Gen.Update(msg)
 	}
 
 	return m, nil
@@ -172,38 +151,36 @@ func (m *Model) View() tea.View {
 
 	switch m.State {
 	case Start:
-		b.WriteString("Press 'o' to open file or 'q' to quit.\n")
+		b.WriteString("o — открыть файл\n")
+		b.WriteString("g — сгенерировать лабиринт\n")
+		b.WriteString("q — выйти\n")
 
-	case FilePicker:
-		b.WriteString("Выберите файл лабиринта\n")
-		b.WriteString("Используйте стрелки для навигации по директориям\n")
-		b.WriteString("Enter — выбрать файл | Esc — главное меню | q — quit\n")
-
+	case OpenMazeScreen:
 		if m.Err != nil {
 			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
 		}
+		b.WriteString(m.Open.View())
 
-		b.WriteString(m.Picker.View())
+	case GenerateMazeScreen:
+		if m.Err != nil {
+			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
+		}
+		b.WriteString(m.Gen.View())
 
 	case FileLoading:
-		b.WriteString("Загрузка лабиринта...\n\n")
+		b.WriteString("Обработка файла...\n\n")
 		if m.SelectedFile != "" {
 			b.WriteString(m.SelectedFile + "\n")
 		}
-		b.WriteString("\nPress 'q' to quit.\n")
 
 	case MazeLoaded:
 		b.WriteString("Лабиринт загружен.\n\n")
-
 		if m.Maze != nil {
-			// Выделяем область под рендер внутри окна.
-			// 4 строки: заголовок + пустые строки + нижняя подсказка.
 			availW := max(1, m.Width-2)
 			availH := max(1, m.Height-6)
 			b.WriteString(renderMaze(*m.Maze, availW, availH))
 		}
-
-		b.WriteString("\n\nPress 'o' to open another file | 'q' to quit.\n")
+		b.WriteString("\n\nEsc — назад | q — выйти\n")
 	}
 
 	v := tea.NewView(b.String())
