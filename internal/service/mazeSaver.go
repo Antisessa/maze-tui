@@ -64,7 +64,7 @@ func SaveMaze(path string, board domain.Board) error {
 		return fmt.Errorf("write to file: %w", err)
 	}
 
-	if _, err = wr.WriteString("\n"); err != nil {
+	if _, err = wr.WriteString("\n\n"); err != nil {
 		return fmt.Errorf("write to file: %w", err)
 	}
 

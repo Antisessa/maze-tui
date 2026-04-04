@@ -7,7 +7,7 @@ import (
 
 func GenerateMazeCmd(path string, width, height int) tea.Cmd {
 	return func() tea.Msg {
-		board, err := service.GenerateMaze(width, height)
+		board, err := service.GenerateMaze(height, width)
 		if err != nil {
 			return MazeGenerateErrMsg{
 				Path: path,

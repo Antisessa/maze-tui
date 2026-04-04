@@ -5,8 +5,8 @@ type GenerateCanceledMsg struct{}
 type GenerateSubmitMsg struct {
 	Dir    string
 	Name   string
-	Width  int
 	Height int
+	Width  int
 }
 
 type MazeGeneratedMsg struct {

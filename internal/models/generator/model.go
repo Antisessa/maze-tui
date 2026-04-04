@@ -27,8 +27,8 @@ type Model struct {
 
 	DirPicker   filepicker.Model
 	NameInput   textinput.Model
-	WidthInput  textinput.Model
 	HeightInput textinput.Model
+	WidthInput  textinput.Model
 
 	Focused int
 
@@ -43,14 +43,16 @@ func NewModel(startDir string) *Model {
 	dirPicker.DirAllowed = true
 
 	nameInput := textinput.New()
-	nameInput.Placeholder = "maze.txt"
-	nameInput.SetValue("maze.txt")
-
-	widthInput := textinput.New()
-	widthInput.Placeholder = "width"
+	nameInput.Placeholder = "maze_"
+	nameInput.SetValue("maze_")
 
 	heightInput := textinput.New()
 	heightInput.Placeholder = "height"
+	heightInput.SetValue("5")
+
+	widthInput := textinput.New()
+	widthInput.Placeholder = "width"
+	widthInput.SetValue("5")
 
 	return &Model{
 		Step:        StepChooseDir,
@@ -83,19 +85,23 @@ func (m *Model) parseForm() error {
 		return fmt.Errorf("имя файла не может быть пустым")
 	}
 
-	w, err := strconv.Atoi(strings.TrimSpace(m.WidthInput.Value()))
-	if err != nil || w <= 0 {
-		return fmt.Errorf("width должен быть положительным числом")
+	h, err := strconv.Atoi(strings.TrimSpace(m.HeightInput.Value()))
+	if err != nil {
+		return fmt.Errorf("height должен быть числом: %w", err)
+	} else if h <= 0 || h > 50 {
+		return fmt.Errorf("width должен быть больше 0 и меньше 50")
 	}
 
-	h, err := strconv.Atoi(strings.TrimSpace(m.HeightInput.Value()))
-	if err != nil || h <= 0 {
-		return fmt.Errorf("height должен быть положительным числом")
+	w, err := strconv.Atoi(strings.TrimSpace(m.WidthInput.Value()))
+	if err != nil {
+		return fmt.Errorf("width должен быть числом: %w", err)
+	} else if w <= 0 || w > 50 {
+		return fmt.Errorf("width должен быть больше 0 и меньше 50")
 	}
 
 	m.Name = name
-	m.Width = w
 	m.Height = h
+	m.Width = w
 	return nil
 }
 
@@ -103,16 +109,16 @@ func (m *Model) focusInput(idx int) {
 	m.Focused = idx
 
 	m.NameInput.Blur()
-	m.WidthInput.Blur()
 	m.HeightInput.Blur()
+	m.WidthInput.Blur()
 
 	switch idx {
 	case 0:
 		m.NameInput.Focus()
 	case 1:
-		m.WidthInput.Focus()
-	case 2:
 		m.HeightInput.Focus()
+	case 2:
+		m.WidthInput.Focus()
 	}
 }
 
@@ -150,8 +156,8 @@ func (m *Model) View() string {
 
 		b.WriteString("Папка: " + m.Dir + "\n\n")
 		b.WriteString("Имя файла: " + m.NameInput.View() + "\n")
-		b.WriteString("Width:     " + m.WidthInput.View() + "\n")
-		b.WriteString("Height:    " + m.HeightInput.View() + "\n")
+		b.WriteString("Height (Rows): " + m.HeightInput.View() + "\n")
+		b.WriteString("Width (Cols): " + m.WidthInput.View() + "\n")
 
 		if m.Err != nil {
 			b.WriteString("\nОшибка: " + m.Err.Error())
@@ -161,8 +167,8 @@ func (m *Model) View() string {
 		b.WriteString("Подтвердите генерацию\n\n")
 		b.WriteString("Папка:  " + m.Dir + "\n")
 		b.WriteString("Файл:   " + m.Name + "\n")
-		b.WriteString("Width:  " + strconv.Itoa(m.Width) + "\n")
-		b.WriteString("Height: " + strconv.Itoa(m.Height) + "\n\n")
+		b.WriteString("Height (Rows): " + strconv.Itoa(m.Height) + "\n")
+		b.WriteString("Width (Cols):  " + strconv.Itoa(m.Width) + "\n\n")
 		b.WriteString("Enter — сгенерировать | Esc — назад")
 	}
 
@@ -237,9 +243,9 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	case 0:
 		m.NameInput, cmd = m.NameInput.Update(msg)
 	case 1:
-		m.WidthInput, cmd = m.WidthInput.Update(msg)
-	case 2:
 		m.HeightInput, cmd = m.HeightInput.Update(msg)
+	case 2:
+		m.WidthInput, cmd = m.WidthInput.Update(msg)
 	}
 
 	return cmd
@@ -257,8 +263,8 @@ func (m *Model) updateConfirm(msg tea.Msg) tea.Cmd {
 				return GenerateSubmitMsg{
 					Dir:    m.Dir,
 					Name:   m.Name,
-					Width:  m.Width,
 					Height: m.Height,
+					Width:  m.Width,
 				}
 			}
 		}
