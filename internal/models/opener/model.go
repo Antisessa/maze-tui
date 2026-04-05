@@ -72,7 +72,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
 	s := "Выберите файл лабиринта\n"
 	s += "Enter — выбрать | r — в начало | Esc — назад | q — quit\n\n"
 
@@ -81,5 +81,5 @@ func (m *Model) View() string {
 	}
 
 	s += m.Picker.View()
-	return s
+	return tea.NewView(s)
 }

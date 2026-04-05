@@ -62,26 +62,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	// File loader cases START
 	case opener.OpenMazeSelectedMsg:
 		m.Err = nil
 		m.SelectedFile = msg.Path
 		m.State = FileLoading
 		return m, opener.OpenMazeCmd(msg.Path)
 
-	case opener.OpenMazeCanceledMsg:
+	case opener.OpenMazeCanceledMsg: // отменили открытие лабиринта
 		m.State = Start
 		return m, nil
-
-	case generator.GenerateCanceledMsg:
-		m.State = Start
-		return m, nil
-
-	case generator.GenerateSubmitMsg:
-		fullPath := filepath.Join(msg.Dir, msg.Name)
-		m.SelectedFile = fullPath
-		m.State = FileLoading
-		m.Err = nil
-		return m, generator.GenerateMazeCmd(fullPath, msg.Width, msg.Height)
 
 	case opener.MazeLoadedMsg:
 		m.Maze = &msg.Board
@@ -94,6 +84,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Err = fmt.Errorf("ошибка чтения файла %s: %w", msg.Path, msg.Err)
 		m.State = OpenMazeScreen
 		return m, nil
+	// File loader cases END
+
+	// Maze generator cases START
+	case generator.GenerateCanceledMsg:
+		m.State = Start
+		return m, nil
+
+	case generator.GenerateSubmitMsg:
+		fullPath := filepath.Join(msg.Dir, msg.Name)
+		m.SelectedFile = fullPath
+		m.State = FileLoading
+		m.Err = nil
+		return m, generator.GenerateMazeCmd(fullPath, msg.Width, msg.Height)
 
 	case generator.MazeGeneratedMsg:
 		// при желании можно сразу открыть сгенерированный файл:
@@ -105,7 +108,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Err = fmt.Errorf("ошибка генерации файла %s: %w", msg.Path, msg.Err)
 		m.State = GenerateMazeScreen
 		return m, nil
-	}
+	} // Maze generator cases START
 
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		switch key.String() {
@@ -159,7 +162,7 @@ func (m *Model) View() tea.View {
 		if m.Err != nil {
 			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
 		}
-		b.WriteString(m.Open.View())
+		b.WriteString(m.Open.View().Content)
 
 	case GenerateMazeScreen:
 		if m.Err != nil {
