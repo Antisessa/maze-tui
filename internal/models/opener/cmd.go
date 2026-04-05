@@ -2,12 +2,12 @@ package opener
 
 import (
 	tea "charm.land/bubbletea/v2"
-	"maze/internal/service"
+	"maze/internal/models/shared"
 )
 
-func OpenMazeCmd(path string) tea.Cmd {
+func OpenMazeCmd(path string, storage shared.MazeStorage) tea.Cmd {
 	return func() tea.Msg {
-		board, err := service.Open(path)
+		board, err := storage.Open(path)
 		if err != nil {
 			return MazeLoadErrMsg{
 				Path: path,

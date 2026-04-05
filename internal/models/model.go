@@ -4,8 +4,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"maze/internal/domain"
+	"maze/internal/models/cave"
 	"maze/internal/models/generator"
 	"maze/internal/models/opener"
+	"maze/internal/models/shared"
 	"path/filepath"
 	"strings"
 )
@@ -16,6 +18,7 @@ const (
 	Start State = iota
 	OpenMazeScreen
 	GenerateMazeScreen
+	CaveScreen
 	FileLoading
 	MazeLoaded
 )
@@ -31,16 +34,21 @@ type Model struct {
 	SelectedFile string
 	StartDir     string
 
+	MazeStorage shared.MazeStorage
+
 	Open *opener.Model
 	Gen  *generator.Model
+	Cave *cave.Model
 }
 
-func InitModel(startDir string) *Model {
+func InitModel(startDir string, mazeStorage shared.MazeStorage, caveStorage shared.CaveStorage) *Model {
 	return &Model{
-		State:    Start,
-		StartDir: startDir,
-		Open:     opener.NewModel(startDir),
-		Gen:      generator.NewModel(startDir),
+		State:       Start,
+		StartDir:    startDir,
+		MazeStorage: mazeStorage,
+		Open:        opener.NewModel(startDir),
+		Gen:         generator.NewModel(startDir),
+		Cave:        cave.New(startDir, caveStorage),
 	}
 }
 
@@ -60,6 +68,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Gen != nil {
 			m.Gen.SetSize(msg.Width, msg.Height)
 		}
+
+		// resize cave-submodel нужен именно сообщением
+		if m.State == CaveScreen && m.Cave != nil {
+			return m, m.Cave.Update(msg)
+		}
 		return m, nil
 
 	// File loader cases START
@@ -67,9 +80,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Err = nil
 		m.SelectedFile = msg.Path
 		m.State = FileLoading
-		return m, opener.OpenMazeCmd(msg.Path)
+		return m, opener.OpenMazeCmd(msg.Path, m.MazeStorage)
 
-	case opener.OpenMazeCanceledMsg: // отменили открытие лабиринта
+	case opener.OpenMazeCanceledMsg:
 		m.State = Start
 		return m, nil
 
@@ -96,52 +109,83 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SelectedFile = fullPath
 		m.State = FileLoading
 		m.Err = nil
-		return m, generator.GenerateMazeCmd(fullPath, msg.Width, msg.Height)
+		return m, generator.GenerateMazeCmd(fullPath, msg.Width, msg.Height, m.MazeStorage)
 
 	case generator.MazeGeneratedMsg:
-		// при желании можно сразу открыть сгенерированный файл:
 		m.SelectedFile = msg.Path
 		m.State = FileLoading
-		return m, opener.OpenMazeCmd(msg.Path)
+		return m, opener.OpenMazeCmd(msg.Path, m.MazeStorage)
 
 	case generator.MazeGenerateErrMsg:
 		m.Err = fmt.Errorf("ошибка генерации файла %s: %w", msg.Path, msg.Err)
 		m.State = GenerateMazeScreen
 		return m, nil
-	} // Maze generator cases START
+	// Maze generator cases END
 
+	// Cave cases START
+	case cave.CancelMsg:
+		m.State = Start
+		return m, nil
+		// Cave cases END
+	}
+
+	// Глобально только аварийный выход
 	if key, ok := msg.(tea.KeyPressMsg); ok {
-		switch key.String() {
-		case "q", "й", "ctrl+c":
+		if key.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+	}
 
-		case "o", "щ", "ctrl+o":
-			m.Err = nil
-			m.Open = opener.NewModel(m.StartDir)
-			m.Open.SetSize(m.Width, m.Height)
-			m.State = OpenMazeScreen
-			return m, m.Open.Init()
+	// Сначала отдаём сообщение активному дочернему экрану
+	switch m.State {
+	case OpenMazeScreen:
+		return m, m.Open.Update(msg)
 
-		case "g", "п":
-			m.Err = nil
-			m.Gen = generator.NewModel(m.StartDir)
-			m.Gen.SetSize(m.Width, m.Height)
-			m.State = GenerateMazeScreen
-			return m, m.Gen.Init()
+	case GenerateMazeScreen:
+		return m, m.Gen.Update(msg)
 
-		case "esc":
-			if m.State == MazeLoaded {
+	case CaveScreen:
+		return m, m.Cave.Update(msg)
+	}
+
+	// Потом хоткеи parent
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch m.State {
+		case Start:
+			switch key.String() {
+			case "q", "й":
+				return m, tea.Quit
+
+			case "o", "щ", "ctrl+o":
+				m.Err = nil
+				m.Open = opener.NewModel(m.StartDir)
+				m.Open.SetSize(m.Width, m.Height)
+				m.State = OpenMazeScreen
+				return m, m.Open.Init()
+
+			case "g", "п":
+				m.Err = nil
+				m.Gen = generator.NewModel(m.StartDir)
+				m.Gen.SetSize(m.Width, m.Height)
+				m.State = GenerateMazeScreen
+				return m, m.Gen.Init()
+
+			case "c", "с":
+				m.Err = nil
+				m.Cave = cave.New(m.StartDir, m.Cave.Storage)
+				m.State = CaveScreen
+				return m, m.Cave.Init()
+			}
+
+		case MazeLoaded:
+			switch key.String() {
+			case "q", "й":
+				return m, tea.Quit
+			case "esc":
 				m.State = Start
 				return m, nil
 			}
 		}
-	}
-
-	switch m.State {
-	case OpenMazeScreen:
-		return m, m.Open.Update(msg)
-	case GenerateMazeScreen:
-		return m, m.Gen.Update(msg)
 	}
 
 	return m, nil
@@ -156,6 +200,7 @@ func (m *Model) View() tea.View {
 	case Start:
 		b.WriteString("o — открыть файл\n")
 		b.WriteString("g — сгенерировать лабиринт\n")
+		b.WriteString("c — пещеры\n")
 		b.WriteString("q — выйти\n")
 
 	case OpenMazeScreen:
@@ -184,6 +229,11 @@ func (m *Model) View() tea.View {
 			b.WriteString(renderMaze(*m.Maze, availW, availH))
 		}
 		b.WriteString("\n\nEsc — назад | q — выйти\n")
+
+	case CaveScreen:
+		if m.Cave != nil {
+			b.WriteString(m.Cave.View().Content)
+		}
 	}
 
 	v := tea.NewView(b.String())
@@ -192,40 +242,30 @@ func (m *Model) View() tea.View {
 }
 
 // renderMaze рисует лабиринт в доступную символьную область.
-// В TUI нельзя буквально обеспечить "500x500 px" и "2 px wall":
-// здесь это переводится в заполнение доступной области терминала символами. :contentReference[oaicite:1]{index=1}
 func renderMaze(board domain.Board, areaW, areaH int) string {
 	if board.Width <= 0 || board.Height <= 0 {
 		return "empty maze"
 	}
 
-	// В TUI одна "толщина стены" = 1 символ.
-	// Если терминал широкий и хочешь сделать стены толще,
-	// можно увеличить до 2, но тогда резко вырастут требования к размеру окна.
 	wall := 1
 
-	// Квадратная область рендера, аналог "500x500".
 	side := min(areaW, areaH)
 	if side <= 0 {
 		return "no space to render maze"
 	}
 	drawW, drawH := side, side
 
-	// Минимально: каждая ячейка хотя бы 1x1 + стены
 	minW := (board.Width+1)*wall + board.Width
 	minH := (board.Height+1)*wall + board.Height
 	if drawW < minW || drawH < minH {
 		return "terminal too small to render maze"
 	}
 
-	// Аналог формулы из ТЗ:
-	// всё пространство = стены + внутренности ячеек
 	cellW := splitEven(drawW-(board.Width+1)*wall, board.Width)
 	cellH := splitEven(drawH-(board.Height+1)*wall, board.Height)
 
-	// Позиции вертикальных и горизонтальных границ
-	xb := make([]int, board.Width+1)  // x начала каждой вертикальной границы
-	yb := make([]int, board.Height+1) // y начала каждой горизонтальной границы
+	xb := make([]int, board.Width+1)
+	yb := make([]int, board.Height+1)
 
 	for c := 0; c < board.Width; c++ {
 		xb[c+1] = xb[c] + wall + cellW[c]
@@ -245,35 +285,30 @@ func renderMaze(board domain.Board, areaW, areaH int) string {
 		}
 	}
 
-	// Верхняя и левая внешние границы всегда есть
-	fillRect(canvas, 0, 0, totalW, wall, '█') // top
-	fillRect(canvas, 0, 0, wall, totalH, '█') // left
+	fillRect(canvas, 0, 0, totalW, wall, '█')
+	fillRect(canvas, 0, 0, wall, totalH, '█')
 
 	for r := 0; r < board.Height; r++ {
 		for c := 0; c < board.Width; c++ {
 			cell := board.Cells[r][c]
 
-			// Правая граница ячейки
-			// Для надёжности последнюю колонку можно форсировать как внешнюю границу
 			if cell.RightWall || c == board.Width-1 {
 				fillRect(
 					canvas,
-					xb[c+1], // x начала правой границы
-					yb[r],   // от верхней границы строки
+					xb[c+1],
+					yb[r],
 					wall,
-					cellH[r]+2*wall, // до нижней границы строки включительно
+					cellH[r]+2*wall,
 					'█',
 				)
 			}
 
-			// Нижняя граница ячейки
-			// Для надёжности последнюю строку можно форсировать как внешнюю границу
 			if cell.BottomWall || r == board.Height-1 {
 				fillRect(
 					canvas,
-					xb[c],           // от левой границы столбца
-					yb[r+1],         // y начала нижней границы
-					cellW[c]+2*wall, // до правой границы столбца включительно
+					xb[c],
+					yb[r+1],
+					cellW[c]+2*wall,
 					wall,
 					'█',
 				)

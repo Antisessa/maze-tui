@@ -1,4 +1,4 @@
-package service
+package storage
 
 import (
 	"bufio"
@@ -14,7 +14,10 @@ const (
 	VerticalMatrix
 )
 
-func Open(path string) (domain.Board, error) {
+type MazeStorage struct {
+}
+
+func (m MazeStorage) Open(path string) (domain.Board, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return domain.Board{}, fmt.Errorf("open file: %w", err)
@@ -54,7 +57,7 @@ func Open(path string) (domain.Board, error) {
 		rows[i] = make([]domain.Cell, width)
 	}
 
-	err = scanMatrix(scanner, &rows, VerticalMatrix, height, width)
+	err = scanMazeMatrix(scanner, &rows, VerticalMatrix, height, width)
 	if err != nil {
 		return domain.Board{}, fmt.Errorf("scan vertical wall matrix: %w", err)
 	}
@@ -68,7 +71,7 @@ func Open(path string) (domain.Board, error) {
 	}
 	_ = scanner.Text() // parse \n
 
-	err = scanMatrix(scanner, &rows, HorizontalMatrix, height, width)
+	err = scanMazeMatrix(scanner, &rows, HorizontalMatrix, height, width)
 	if err != nil {
 		return domain.Board{}, fmt.Errorf("scan horizontal wall matrix: %w", err)
 	}
@@ -84,7 +87,7 @@ func Open(path string) (domain.Board, error) {
 	}, nil
 }
 
-func scanMatrix(scanner *bufio.Scanner, rows *[][]domain.Cell, direction int, height, width int) error {
+func scanMazeMatrix(scanner *bufio.Scanner, rows *[][]domain.Cell, direction int, height, width int) error {
 	successRows := 0
 	for i := 0; i < height && scanner.Scan(); i++ {
 		rowStr := scanner.Text()
@@ -112,6 +115,72 @@ func scanMatrix(scanner *bufio.Scanner, rows *[][]domain.Cell, direction int, he
 	}
 	if successRows != height {
 		return fmt.Errorf("mismatch scanned rows and matrix height - got: %d want: %d", successRows+1, height)
+	}
+	return nil
+}
+
+func (m MazeStorage) Save(path string, board domain.Board) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create file while save: %w", err)
+	}
+	defer func() {
+		closeErr := file.Close()
+		if err == nil && closeErr != nil {
+			err = fmt.Errorf("close file after save: %w", closeErr)
+		}
+	}()
+
+	wr := bufio.NewWriter(file)
+	defer func() {
+		flushErr := wr.Flush()
+		if err == nil && flushErr != nil {
+			err = fmt.Errorf("flush writer after save: %w", flushErr)
+		}
+	}()
+
+	if _, err = fmt.Fprintf(wr, "%d %d\n", board.Height, board.Width); err != nil {
+		return fmt.Errorf("write dimensions: %w", err)
+	}
+
+	builderVertMatrix := strings.Builder{}
+	builderHorMatrix := strings.Builder{}
+	for i := range board.Cells {
+		for j := range board.Cells[i] {
+			if board.Cells[i][j].RightWall {
+				builderVertMatrix.Write([]byte("1"))
+			} else {
+				builderVertMatrix.Write([]byte("0"))
+			}
+
+			if board.Cells[i][j].BottomWall {
+				builderHorMatrix.Write([]byte("1"))
+			} else {
+				builderHorMatrix.Write([]byte("0"))
+			}
+
+			if j != len(board.Cells[i])-1 {
+				builderVertMatrix.Write([]byte(" "))
+				builderHorMatrix.Write([]byte(" "))
+			}
+		}
+
+		if i != len(board.Cells)-1 {
+			builderVertMatrix.Write([]byte("\n"))
+			builderHorMatrix.Write([]byte("\n"))
+		}
+	}
+
+	if _, err = wr.WriteString(builderVertMatrix.String()); err != nil {
+		return fmt.Errorf("write to file: %w", err)
+	}
+
+	if _, err = wr.WriteString("\n\n"); err != nil {
+		return fmt.Errorf("write to file: %w", err)
+	}
+
+	if _, err = wr.WriteString(builderHorMatrix.String()); err != nil {
+		return fmt.Errorf("write to file: %w", err)
 	}
 	return nil
 }
