@@ -1,9 +1,12 @@
 package opener
 
 import (
+	"fmt"
+	"strings"
+
 	"charm.land/bubbles/v2/filepicker"
 	tea "charm.land/bubbletea/v2"
-	"fmt"
+	"maze/internal/ui"
 )
 
 type Model struct {
@@ -73,13 +76,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *Model) View() tea.View {
-	s := "Выберите файл лабиринта\n"
-	s += "Enter — выбрать | r — в начало | Esc — назад | q — quit\n\n"
+	var b strings.Builder
+	b.WriteString(ui.Title("Выберите файл лабиринта"))
+	b.WriteString(ui.Hint("Enter — выбрать | r — в начало | Esc — назад") + "\n\n")
 
 	if m.Err != nil {
-		s += "Ошибка: " + m.Err.Error() + "\n\n"
+		b.WriteString(ui.ErrorLine(m.Err.Error()) + "\n\n")
 	}
 
-	s += m.Picker.View()
-	return tea.NewView(s)
+	b.WriteString(m.Picker.View())
+	return tea.NewView(b.String())
 }

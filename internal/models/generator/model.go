@@ -1,12 +1,14 @@
 package generator
 
 import (
-	"charm.land/bubbles/v2/filepicker"
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"charm.land/bubbles/v2/filepicker"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"maze/internal/ui"
 )
 
 type GenerateStep int
@@ -139,37 +141,36 @@ func (m *Model) View() string {
 
 	switch m.Step {
 	case StepChooseDir:
-		b.WriteString("Выберите директорию для сохранения\n")
-		b.WriteString("Enter — подтвердить текущую папку | Esc — назад\n\n")
+		b.WriteString(ui.Title("Выберите директорию для сохранения"))
+		b.WriteString(ui.Hint("Enter — подтвердить текущую папку | Esc — назад") + "\n\n")
 
 		if m.Err != nil {
-			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
+			b.WriteString(ui.ErrorLine(m.Err.Error()) + "\n\n")
 		}
 
-		b.WriteString("Текущая папка:\n")
-		b.WriteString(m.DirPicker.CurrentDirectory + "\n\n")
+		b.WriteString(ui.Label("Текущая папка", m.DirPicker.CurrentDirectory) + "\n\n")
 		b.WriteString(m.DirPicker.View())
 
 	case StepForm:
-		b.WriteString("Параметры генерации\n")
-		b.WriteString("Tab — следующее поле | Enter — далее | Esc — к выбору папки\n\n")
+		b.WriteString(ui.Title("Параметры генерации"))
+		b.WriteString(ui.Hint("Tab — следующее поле | Enter — далее | Esc — к выбору папки") + "\n\n")
 
-		b.WriteString("Папка: " + m.Dir + "\n\n")
-		b.WriteString("Имя файла: " + m.NameInput.View() + "\n")
-		b.WriteString("Height (Rows): " + m.HeightInput.View() + "\n")
-		b.WriteString("Width (Cols): " + m.WidthInput.View() + "\n")
+		b.WriteString(ui.Label("Папка", m.Dir) + "\n\n")
+		b.WriteString(ui.Label("Имя файла", m.NameInput.View()) + "\n")
+		b.WriteString(ui.Label("Height (Rows)", m.HeightInput.View()) + "\n")
+		b.WriteString(ui.Label("Width (Cols)", m.WidthInput.View()) + "\n")
 
 		if m.Err != nil {
-			b.WriteString("\nОшибка: " + m.Err.Error())
+			b.WriteString("\n" + ui.ErrorLine(m.Err.Error()))
 		}
 
 	case StepConfirm:
-		b.WriteString("Подтвердите генерацию\n\n")
-		b.WriteString("Папка:  " + m.Dir + "\n")
-		b.WriteString("Файл:   " + m.Name + "\n")
-		b.WriteString("Height (Rows): " + strconv.Itoa(m.Height) + "\n")
-		b.WriteString("Width (Cols):  " + strconv.Itoa(m.Width) + "\n\n")
-		b.WriteString("Enter — сгенерировать | Esc — назад")
+		b.WriteString(ui.Title("Подтвердите генерацию") + "\n")
+		b.WriteString(ui.Label("Папка", m.Dir) + "\n")
+		b.WriteString(ui.Label("Файл", m.Name) + "\n")
+		b.WriteString(ui.Label("Height (Rows)", strconv.Itoa(m.Height)) + "\n")
+		b.WriteString(ui.Label("Width (Cols)", strconv.Itoa(m.Width)) + "\n\n")
+		b.WriteString(ui.Hint("Enter — сгенерировать | Esc — назад"))
 	}
 
 	return b.String()

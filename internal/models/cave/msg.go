@@ -16,5 +16,7 @@ type ErrorMsg struct {
 	Err error
 }
 
-type stepTickMsg struct{}
+type stepTickMsg struct {
+	Gen int
+}
 type CancelMsg struct{}

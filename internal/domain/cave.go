@@ -17,13 +17,20 @@ type Cave struct {
 	Rows, Cols                     int
 }
 
-func InitCave(chance float32, birth, death, rows, cols int) (Cave, error) {
+func validateCaveRules(chance float32, birth, death int) error {
 	if chance > 1.0 || chance <= 0 {
-		return Cave{}, fmt.Errorf("cell initialization chance should be in range (0; 1]")
+		return fmt.Errorf("cell initialization chance should be in range (0; 1]")
 	} else if birth < 0 || birth > 7 {
-		return Cave{}, fmt.Errorf("birth threshold should be in range [0; 7]")
+		return fmt.Errorf("birth threshold should be in range [0; 7]")
 	} else if death < 0 || death > 7 {
-		return Cave{}, fmt.Errorf("death threshold should be in range [0; 7]")
+		return fmt.Errorf("death threshold should be in range [0; 7]")
+	}
+	return nil
+}
+
+func InitCave(chance float32, birth, death, rows, cols int) (Cave, error) {
+	if err := validateCaveRules(chance, birth, death); err != nil {
+		return Cave{}, err
 	} else if rows <= 0 || rows > 50 {
 		return Cave{}, fmt.Errorf("cave's Rows should be in range [1; 50]")
 	} else if cols <= 0 || cols > 50 {
@@ -65,11 +72,11 @@ func (c *Cave) LoadCave(cells [][]bool) error {
 				n++
 			}
 		}
-		k++
-	}
-	if k != c.Rows-1 || n != c.Cols-1 {
-		params := fmt.Sprintln("rows:", c.Rows, "cols:", c.Cols, "k:", k, "n:", n)
-		return fmt.Errorf("dimension mismatch %s", params)
+		// BorderWidth = 1
+		// # . . . #
+		if i > BorderWidth-1 && i < len(c.CurrentCells)-BorderWidth {
+			k++
+		}
 	}
 	return nil
 }
@@ -152,4 +159,20 @@ func (c *Cave) Cells() [][]bool {
 
 func (c *Cave) Step() {
 	c.cellularAutomatonStep()
+}
+
+func (c *Cave) ConfigureRules(birth, death int) error {
+	if birth < 0 || birth > 7 {
+		return fmt.Errorf("birth threshold should be in range [0; 7]")
+	}
+	if death < 0 || death > 7 {
+		return fmt.Errorf("death threshold should be in range [0; 7]")
+	}
+	c.initChance = 0.45 // default value
+	if err := validateCaveRules(c.initChance, birth, death); err != nil {
+		return err
+	}
+	c.birthThreshold = birth
+	c.deathThreshold = death
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"maze/internal/models/generator"
 	"maze/internal/models/opener"
 	"maze/internal/models/shared"
+	"maze/internal/ui"
 	"path/filepath"
 	"strings"
 )
@@ -35,6 +36,7 @@ type Model struct {
 	StartDir     string
 
 	MazeStorage shared.MazeStorage
+	CaveStorage shared.CaveStorage
 
 	Open *opener.Model
 	Gen  *generator.Model
@@ -46,6 +48,7 @@ func InitModel(startDir string, mazeStorage shared.MazeStorage, caveStorage shar
 		State:       Start,
 		StartDir:    startDir,
 		MazeStorage: mazeStorage,
+		CaveStorage: caveStorage,
 		Open:        opener.NewModel(startDir),
 		Gen:         generator.NewModel(startDir),
 		Cave:        cave.New(startDir, caveStorage),
@@ -172,7 +175,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "c", "с":
 				m.Err = nil
-				m.Cave = cave.New(m.StartDir, m.Cave.Storage)
+				if m.Cave == nil {
+					m.Cave = cave.New(m.StartDir, m.CaveStorage)
+				}
+				m.Cave.SetSize(m.Width, m.Height)
 				m.State = CaveScreen
 				return m, m.Cave.Init()
 			}
@@ -194,41 +200,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	var b strings.Builder
 
-	b.WriteString("A1_Maze_Go\n\n")
-
 	switch m.State {
 	case Start:
-		b.WriteString("o — открыть файл\n")
-		b.WriteString("g — сгенерировать лабиринт\n")
-		b.WriteString("c — пещеры\n")
-		b.WriteString("q — выйти\n")
+		b.WriteString(ui.StackVert(
+			ui.Title("Меню"),
+			ui.MenuLine("o", "открыть файл"),
+			ui.MenuLine("g", "сгенерировать лабиринт"),
+			ui.MenuLine("c", "пещеры"),
+			ui.MenuLine("q", "выйти"),
+		))
 
 	case OpenMazeScreen:
 		if m.Err != nil {
-			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
+			b.WriteString(ui.ErrorLine(m.Err.Error()) + "\n\n")
 		}
 		b.WriteString(m.Open.View().Content)
 
 	case GenerateMazeScreen:
 		if m.Err != nil {
-			b.WriteString("Ошибка: " + m.Err.Error() + "\n\n")
+			b.WriteString(ui.ErrorLine(m.Err.Error()) + "\n\n")
 		}
 		b.WriteString(m.Gen.View())
 
 	case FileLoading:
-		b.WriteString("Обработка файла...\n\n")
+		b.WriteString(ui.Title("Обработка файла"))
 		if m.SelectedFile != "" {
-			b.WriteString(m.SelectedFile + "\n")
+			b.WriteString("\n" + ui.Muted(m.SelectedFile) + "\n")
 		}
 
 	case MazeLoaded:
-		b.WriteString("Лабиринт загружен.\n\n")
+		b.WriteString(ui.OkLine("Лабиринт загружен.") + "\n\n")
 		if m.Maze != nil {
-			availW := max(1, m.Width-2)
-			availH := max(1, m.Height-6)
-			b.WriteString(renderMaze(*m.Maze, availW, availH))
+			availW := max(1, m.Width-4)
+			availH := max(1, m.Height-8)
+			b.WriteString(ui.MazeBlock(renderMaze(*m.Maze, availW, availH)))
 		}
-		b.WriteString("\n\nEsc — назад | q — выйти\n")
+		b.WriteString("\n\n" + ui.Hint("Esc — назад | q — выйти"))
 
 	case CaveScreen:
 		if m.Cave != nil {
@@ -236,7 +243,7 @@ func (m *Model) View() tea.View {
 		}
 	}
 
-	v := tea.NewView(b.String())
+	v := tea.NewView(ui.Page(m.Width, ui.LayoutWithBrand(b.String())))
 	v.AltScreen = true
 	return v
 }
@@ -249,77 +256,62 @@ func renderMaze(board domain.Board, areaW, areaH int) string {
 
 	wall := 1
 
-	side := min(areaW, areaH)
-	if side <= 0 {
-		return "no space to render maze"
-	}
-	drawW, drawH := side, side
-
+	// min размеры при cell=1
 	minW := (board.Width+1)*wall + board.Width
 	minH := (board.Height+1)*wall + board.Height
-	if drawW < minW || drawH < minH {
+	if areaW < minW || areaH < minH {
 		return "terminal too small to render maze"
 	}
 
-	cellW := splitEven(drawW-(board.Width+1)*wall, board.Width)
-	cellH := splitEven(drawH-(board.Height+1)*wall, board.Height)
-
-	xb := make([]int, board.Width+1)
-	yb := make([]int, board.Height+1)
-
-	for c := 0; c < board.Width; c++ {
-		xb[c+1] = xb[c] + wall + cellW[c]
-	}
-	for r := 0; r < board.Height; r++ {
-		yb[r+1] = yb[r] + wall + cellH[r]
+	// Единый размер клетки для всего лабиринта
+	cellByW := (areaW - (board.Width+1)*wall) / board.Width
+	cellByH := (areaH - (board.Height+1)*wall) / board.Height
+	cell := min(cellByW, cellByH)
+	if cell < 1 {
+		cell = 1
 	}
 
-	totalW := xb[board.Width] + wall
-	totalH := yb[board.Height] + wall
+	totalW := (board.Width+1)*wall + board.Width*cell
+	totalH := (board.Height+1)*wall + board.Height*cell
 
-	canvas := make([][]rune, totalH)
+	padLeft := (areaW - totalW) / 2
+	padTop := (areaH - totalH) / 2
+
+	canvas := make([][]rune, areaH)
 	for y := range canvas {
-		canvas[y] = make([]rune, totalW)
+		canvas[y] = make([]rune, areaW)
 		for x := range canvas[y] {
 			canvas[y][x] = ' '
 		}
 	}
 
-	fillRect(canvas, 0, 0, totalW, wall, '█')
-	fillRect(canvas, 0, 0, wall, totalH, '█')
+	// Внешние границы
+	fillRect(canvas, padLeft, padTop, totalW, wall, '█')
+	fillRect(canvas, padLeft, padTop, wall, totalH, '█')
+
+	// Вспомогательные функции координат
+	cellX := func(c int) int { return padLeft + wall + c*(cell+wall) }
+	cellY := func(r int) int { return padTop + wall + r*(cell+wall) }
+	rightWallX := func(c int) int { return cellX(c) + cell }
+	bottomWallY := func(r int) int { return cellY(r) + cell }
 
 	for r := 0; r < board.Height; r++ {
 		for c := 0; c < board.Width; c++ {
-			cell := board.Cells[r][c]
+			cellData := board.Cells[r][c]
 
-			if cell.RightWall || c == board.Width-1 {
-				fillRect(
-					canvas,
-					xb[c+1],
-					yb[r],
-					wall,
-					cellH[r]+2*wall,
-					'█',
-				)
+			if cellData.RightWall || c == board.Width-1 {
+				fillRect(canvas, rightWallX(c), cellY(r)-wall, wall, cell+2*wall, '█')
 			}
-
-			if cell.BottomWall || r == board.Height-1 {
-				fillRect(
-					canvas,
-					xb[c],
-					yb[r+1],
-					cellW[c]+2*wall,
-					wall,
-					'█',
-				)
+			if cellData.BottomWall || r == board.Height-1 {
+				fillRect(canvas, cellX(c)-wall, bottomWallY(r), cell+2*wall, wall, '█')
 			}
 		}
 	}
 
 	var out strings.Builder
-	for y := 0; y < totalH; y++ {
+	for y := 0; y < areaH; y++ {
 		out.WriteString(string(canvas[y]))
-		if y != totalH-1 {
+		if y != areaH-1 {
 			out.WriteByte('\n')
 		}
 	}

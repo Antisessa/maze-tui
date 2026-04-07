@@ -1,16 +1,18 @@
 package cave
 
 import (
-	"charm.land/bubbles/v2/filepicker"
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"maze/internal/domain"
 	"maze/internal/models/shared"
+	"maze/internal/ui"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"charm.land/bubbles/v2/filepicker"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 type State int
@@ -21,6 +23,7 @@ const (
 	StateForm
 	StateConfirm
 	StateLoad
+	StateLoadRules
 	StateRun
 )
 
@@ -32,6 +35,12 @@ const (
 	focusBirth
 	focusDeath
 	focusCount
+)
+
+const (
+	openFocusBirth = iota
+	openFocusDeath
+	openFocusCount
 )
 
 type Model struct {
@@ -56,24 +65,28 @@ type Model struct {
 	BirthRateInput  textinput.Model
 	DeathRateInput  textinput.Model
 	Focused         int
+	OpenFocused     int
 
 	// for loading
 	CavePicker filepicker.Model
 
 	ScreenWidth, ScreenHeight int
 	StartDir                  string
+	TickGen                   int
 }
 
 func New(startDir string, storage shared.CaveStorage) *Model {
-	loadPicker := filepicker.New()
-	loadPicker.CurrentDirectory = startDir
-	loadPicker.FileAllowed = true
-	loadPicker.DirAllowed = false
+	cavePicker := filepicker.New()
+	cavePicker.CurrentDirectory = startDir
+	cavePicker.FileAllowed = true
+	cavePicker.DirAllowed = false
+	cavePicker.SetHeight(10)
 
 	dirPicker := filepicker.New()
 	dirPicker.CurrentDirectory = startDir
 	dirPicker.FileAllowed = false
 	dirPicker.DirAllowed = true
+	dirPicker.SetHeight(10)
 
 	name := textinput.New()
 	name.Placeholder = "Имя файла"
@@ -104,8 +117,8 @@ func New(startDir string, storage shared.CaveStorage) *Model {
 		StartDir:        startDir,
 		Storage:         storage,
 		State:           StateMenu,
-		StepInterval:    300 * time.Millisecond,
-		CavePicker:      loadPicker,
+		StepInterval:    1 * time.Second,
+		CavePicker:      cavePicker,
 		DirPicker:       dirPicker,
 		NameInput:       name,
 		RowsInput:       rows,
@@ -114,19 +127,34 @@ func New(startDir string, storage shared.CaveStorage) *Model {
 		BirthRateInput:  birth,
 		DeathRateInput:  death,
 		Focused:         focusName,
+		OpenFocused:     openFocusBirth,
 	}
 
 	m.setFocus(focusName)
 	return m
 }
 
+func (m *Model) SetSize(width int, height int) {
+	m.ScreenWidth = width
+	m.ScreenHeight = height
+
+	h := max(height-6, 5)
+	m.DirPicker.SetHeight(h)
+	m.DirPicker.ShowPermissions = width >= 70
+	m.DirPicker.ShowSize = width >= 45
+
+	m.CavePicker.SetHeight(h)
+	m.CavePicker.ShowPermissions = width >= 70
+	m.CavePicker.ShowSize = width >= 45
+}
+
 func (m *Model) Init() tea.Cmd {
 	return nil
 }
 
-func tickStepCmd(d time.Duration) tea.Cmd {
+func tickStepCmd(d time.Duration, gen int) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg {
-		return stepTickMsg{}
+		return stepTickMsg{Gen: gen}
 	})
 }
 
@@ -144,23 +172,24 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case LoadedMsg:
 		m.Cave = &msg.Cave
 		m.Err = nil
-		m.State = StateRun
-		return tickStepCmd(m.StepInterval)
+		m.State = StateLoadRules
+		m.setOpenFocus(openFocusBirth)
+		return nil
 
 	case GeneratedMsg:
 		m.Cave = &msg.Cave
 		m.Err = nil
 		m.State = StateRun
-		return tickStepCmd(m.StepInterval)
+		return tickStepCmd(m.StepInterval, m.TickGen)
 
 	case ErrorMsg:
 		m.Err = msg.Err
 		return nil
 
 	case stepTickMsg:
-		if m.State == StateRun && m.Cave != nil {
+		if msg.Gen == m.TickGen && m.State == StateRun && m.Cave != nil {
 			m.Cave.Step()
-			return tickStepCmd(m.StepInterval)
+			return tickStepCmd(m.StepInterval, m.TickGen)
 		}
 		return nil
 	}
@@ -176,6 +205,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.updateConfirm(msg)
 	case StateLoad:
 		return m.updateLoad(msg)
+	case StateLoadRules:
+		return m.updateLoadRules(msg)
 	case StateRun:
 		return m.updateRun(msg)
 	default:
@@ -193,13 +224,11 @@ func (m *Model) updateMenu(msg tea.Msg) tea.Cmd {
 	case "o", "ctrl+o":
 		m.State = StateLoad
 		m.Err = nil
-		m.CavePicker.CurrentDirectory = m.StartDir
 		return m.CavePicker.Init()
 
 	case "g":
 		m.State = StateChooseDir
 		m.Err = nil
-		m.DirPicker.CurrentDirectory = m.StartDir
 		return m.DirPicker.Init()
 
 	case "esc":
@@ -363,6 +392,7 @@ func (m *Model) updateLoad(msg tea.Msg) tea.Cmd {
 			return m.CavePicker.Init()
 		}
 	}
+
 	var cmd tea.Cmd
 	m.CavePicker, cmd = m.CavePicker.Update(msg)
 
@@ -377,6 +407,40 @@ func (m *Model) updateLoad(msg tea.Msg) tea.Cmd {
 	}
 
 	return cmd
+}
+
+func (m *Model) updateLoadRules(msg tea.Msg) tea.Cmd {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		switch key.String() {
+		case "esc":
+			m.State = StateLoad
+			m.Err = nil
+			m.Cave = nil
+			return nil
+		case "tab", "down":
+			m.setOpenFocus((m.OpenFocused + 1) % openFocusCount)
+			return nil
+		case "shift+tab", "up":
+			m.setOpenFocus((m.OpenFocused - 1 + openFocusCount) % openFocusCount)
+			return nil
+		case "enter":
+			if m.OpenFocused == openFocusDeath {
+				return m.submitLoadRules()
+			}
+			m.setOpenFocus((m.OpenFocused + 1) % openFocusCount)
+			return nil
+		case "ctrl+s":
+			return m.submitLoadRules()
+		}
+	}
+
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+	m.BirthRateInput, cmd = m.BirthRateInput.Update(msg)
+	cmds = append(cmds, cmd)
+	m.DeathRateInput, cmd = m.DeathRateInput.Update(msg)
+	cmds = append(cmds, cmd)
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) updateRun(msg tea.Msg) tea.Cmd {
@@ -402,14 +466,46 @@ func (m *Model) updateRun(msg tea.Msg) tea.Cmd {
 		if m.StepInterval > 50*time.Millisecond {
 			m.StepInterval -= 50 * time.Millisecond
 		}
-		return nil
+		m.TickGen++
+		return tickStepCmd(m.StepInterval, m.TickGen)
 
 	case "-":
 		m.StepInterval += 50 * time.Millisecond
-		return nil
+		m.TickGen++
+		return tickStepCmd(m.StepInterval, m.TickGen)
 	}
 
 	return nil
+}
+
+func (m *Model) submitLoadRules() tea.Cmd {
+	if m.Cave == nil {
+		m.Err = fmt.Errorf("cave is not loaded")
+		return nil
+	}
+
+	birth, err := strconv.Atoi(strings.TrimSpace(m.BirthRateInput.Value()))
+	if err != nil {
+		m.Err = fmt.Errorf("birth threshold should be integer")
+		return nil
+	}
+
+	death, err := strconv.Atoi(strings.TrimSpace(m.DeathRateInput.Value()))
+	if err != nil {
+		m.Err = fmt.Errorf("death threshold should be integer")
+		return nil
+	}
+
+	if err = m.Cave.ConfigureRules(birth, death); err != nil {
+		m.Err = err
+		return nil
+	}
+
+	m.BirthRate = birth
+	m.DeathRate = death
+	m.Err = nil
+	m.State = StateRun
+	return tickStepCmd(m.StepInterval, m.TickGen)
 }
 
 func (m *Model) setFocus(idx int) {
@@ -434,6 +530,23 @@ func (m *Model) setFocus(idx int) {
 	case focusBirth:
 		m.BirthRateInput.Focus()
 	case focusDeath:
+		m.DeathRateInput.Focus()
+	}
+}
+
+func (m *Model) setOpenFocus(idx int) {
+	m.OpenFocused = idx
+	m.NameInput.Blur()
+	m.RowsInput.Blur()
+	m.ColsInput.Blur()
+	m.InitChanceInput.Blur()
+	m.BirthRateInput.Blur()
+	m.DeathRateInput.Blur()
+
+	switch idx {
+	case openFocusBirth:
+		m.BirthRateInput.Focus()
+	case openFocusDeath:
 		m.DeathRateInput.Focus()
 	}
 }
@@ -495,90 +608,83 @@ func (m *Model) View() tea.View {
 
 	switch m.State {
 	case StateMenu:
-		b.WriteString("Cave\n\n")
-		b.WriteString("o / ctrl+o — открыть файл\n")
-		b.WriteString("g          — сгенерировать\n")
-		b.WriteString("esc        — назад\n")
+		b.WriteString(ui.StackVert(
+			ui.Title("Cave"),
+			ui.MenuLine("o", "открыть файл (ctrl+o)"),
+			ui.MenuLine("g", "сгенерировать"),
+			ui.MenuLine("esc", "назад"),
+		))
 
 	case StateChooseDir:
-		b.WriteString("Выберите директорию для сохранения\n\n")
-		b.WriteString("Текущая папка:\n")
-		b.WriteString(m.DirPicker.CurrentDirectory + "\n\n")
+		b.WriteString(ui.Title("Выберите директорию для сохранения"))
+		b.WriteString(ui.Label("Текущая папка", m.DirPicker.CurrentDirectory) + "\n\n")
 		b.WriteString(m.DirPicker.View())
 		b.WriteString("\n\n")
-		b.WriteString("enter  — перейти в папку\n")
-		b.WriteString("ctrl+s — выбрать текущую папку\n")
-		b.WriteString("r      — стартовая директория\n")
-		b.WriteString("esc    — назад\n")
+		b.WriteString(ui.Hint("enter — перейти в папку | ctrl+s — выбрать текущую | r — стартовая | esc — назад"))
 
 	case StateForm:
-		b.WriteString("Параметры генерации\n\n")
-		b.WriteString("Папка: " + m.Dir + "\n\n")
-		b.WriteString(renderField("Имя файла", m.NameInput.View(), m.Focused == focusName))
+		b.WriteString(ui.Title("Параметры генерации"))
+		b.WriteString(ui.Label("Папка", m.Dir) + "\n\n")
+		b.WriteString(ui.FieldLine("Имя файла", m.NameInput.View(), m.Focused == focusName))
 		b.WriteString("\n")
-		b.WriteString(renderField("Rows", m.RowsInput.View(), m.Focused == focusRows))
+		b.WriteString(ui.FieldLine("Rows", m.RowsInput.View(), m.Focused == focusRows))
 		b.WriteString("\n")
-		b.WriteString(renderField("Cols", m.ColsInput.View(), m.Focused == focusCols))
+		b.WriteString(ui.FieldLine("Cols", m.ColsInput.View(), m.Focused == focusCols))
 		b.WriteString("\n")
-		b.WriteString(renderField("Init chance", m.InitChanceInput.View(), m.Focused == focusChance))
+		b.WriteString(ui.FieldLine("Init chance", m.InitChanceInput.View(), m.Focused == focusChance))
 		b.WriteString("\n")
-		b.WriteString(renderField("Birth threshold", m.BirthRateInput.View(), m.Focused == focusBirth))
+		b.WriteString(ui.FieldLine("Birth threshold", m.BirthRateInput.View(), m.Focused == focusBirth))
 		b.WriteString("\n")
-		b.WriteString(renderField("Death threshold", m.DeathRateInput.View(), m.Focused == focusDeath))
+		b.WriteString(ui.FieldLine("Death threshold", m.DeathRateInput.View(), m.Focused == focusDeath))
 		b.WriteString("\n\n")
-		b.WriteString("tab/up/down — сменить поле\n")
-		b.WriteString("enter       — дальше\n")
-		b.WriteString("ctrl+s      — к подтверждению\n")
-		b.WriteString("esc         — назад к выбору директории\n")
+		b.WriteString(ui.Hint("tab/up/down — поле | enter — дальше | ctrl+s — подтвердить | esc — к папке"))
 
 	case StateConfirm:
-		b.WriteString("Подтвердите генерацию\n\n")
-		b.WriteString("Папка: " + m.Dir + "\n")
-		b.WriteString("Имя файла: " + m.Name + "\n")
-		b.WriteString("Rows: " + strconv.Itoa(m.Rows) + "\n")
-		b.WriteString("Cols: " + strconv.Itoa(m.Cols) + "\n")
-		b.WriteString("Init chance: " + fmt.Sprintf("%.2f", m.InitChance) + "\n")
-		b.WriteString("Birth threshold: " + strconv.Itoa(m.BirthRate) + "\n")
-		b.WriteString("Death threshold: " + strconv.Itoa(m.DeathRate) + "\n\n")
-		b.WriteString("enter / ctrl+s — сгенерировать и сохранить\n")
-		b.WriteString("esc            — назад к форме\n")
+		b.WriteString(ui.Title("Подтвердите генерацию") + "\n")
+		b.WriteString(ui.Label("Папка", m.Dir) + "\n")
+		b.WriteString(ui.Label("Имя файла", m.Name) + "\n")
+		b.WriteString(ui.Label("Rows", strconv.Itoa(m.Rows)) + "\n")
+		b.WriteString(ui.Label("Cols", strconv.Itoa(m.Cols)) + "\n")
+		b.WriteString(ui.Label("Init chance", fmt.Sprintf("%.2f", m.InitChance)) + "\n")
+		b.WriteString(ui.Label("Birth threshold", strconv.Itoa(m.BirthRate)) + "\n")
+		b.WriteString(ui.Label("Death threshold", strconv.Itoa(m.DeathRate)) + "\n\n")
+		b.WriteString(ui.Hint("enter / ctrl+s — сгенерировать | esc — к форме"))
 
 	case StateLoad:
-		b.WriteString("Открытие файла пещеры\n\n")
-		b.WriteString(m.CavePicker.CurrentDirectory + "\n\n")
+		b.WriteString(ui.Title("Открытие файла пещеры"))
+		b.WriteString(ui.Label("Папка", m.CavePicker.CurrentDirectory) + "\n\n")
 		b.WriteString(m.CavePicker.View())
+		if m.Err != nil {
+			b.WriteString("\n" + ui.ErrorLine(m.Err.Error()) + "\n")
+		}
+		b.WriteString("\n" + ui.Hint("enter — открыть | r — стартовая папка | esc — назад"))
+
+	case StateLoadRules:
+		b.WriteString(ui.Title("Параметры эволюции"))
+		b.WriteString(ui.FieldLine("Birth threshold", m.BirthRateInput.View(), m.OpenFocused == openFocusBirth))
+		b.WriteString("\n")
+		b.WriteString(ui.FieldLine("Death threshold", m.DeathRateInput.View(), m.OpenFocused == openFocusDeath))
 		b.WriteString("\n\n")
-		b.WriteString("enter — открыть файл\n")
-		b.WriteString("r     — вернуться в стартовую директорию\n")
-		b.WriteString("esc   — назад\n")
+		b.WriteString(ui.Hint("tab/up/down — поле | enter — дальше | ctrl+s — запустить | esc — к файлу"))
 
 	case StateRun:
-		b.WriteString("Пещера\n\n")
+		b.WriteString(ui.Title("Пещера") + "\n")
 		if m.Cave != nil {
 			availW := max(1, m.ScreenWidth-2)
-			availH := max(1, m.ScreenHeight-8)
-			b.WriteString(renderCave(*m.Cave, availW, availH))
+			availH := max(1, m.ScreenHeight-10)
+			b.WriteString(ui.CaveBlock(renderCave(*m.Cave, availW, availH)))
 		} else {
-			b.WriteString("empty cave")
+			b.WriteString(ui.Muted("empty cave"))
 		}
-		b.WriteString("\n\nspace — шаг вручную | +/- — скорость | esc — назад\n")
+		b.WriteString("\n\n" + ui.Label("Шаг", m.StepInterval.String()) + "\n")
+		b.WriteString(ui.Hint("space — вручную | +/- — скорость | esc — назад"))
 	}
 
-	if m.Err != nil {
-		b.WriteString("\nОшибка: ")
-		b.WriteString(m.Err.Error())
-		b.WriteString("\n")
+	if m.Err != nil && m.State != StateLoad {
+		b.WriteString("\n" + ui.ErrorLine(m.Err.Error()) + "\n")
 	}
 
 	return tea.NewView(b.String())
-}
-
-func renderField(label, value string, focused bool) string {
-	prefix := "  "
-	if focused {
-		prefix = "> "
-	}
-	return prefix + label + ": " + value
 }
 
 func renderCave(c domain.Cave, areaW, areaH int) string {
@@ -586,34 +692,33 @@ func renderCave(c domain.Cave, areaW, areaH int) string {
 	if len(cells) == 0 || len(cells[0]) == 0 {
 		return "empty cave"
 	}
-
 	srcH := len(cells)
 	srcW := len(cells[0])
-
-	// В терминале символ примерно выше, чем шире,
-	// поэтому одну логическую клетку рисуем двумя символами по ширине.
-	dstH := max(1, min(areaH, srcH))
-	dstWCells := max(1, min(areaW/2, srcW))
-
+	// 1 клетка = 2 символа по ширине
+	viewportW := max(1, min(srcW, areaW/2))
+	viewportH := max(1, min(srcH, areaH))
+	// Центрированный crop для стабильного кадра
+	startX := (srcW - viewportW) / 2
+	startY := (srcH - viewportH) / 2
+	if startX < 0 {
+		startX = 0
+	}
+	if startY < 0 {
+		startY = 0
+	}
 	var b strings.Builder
-
-	for y := 0; y < dstH; y++ {
-		srcY := y * srcH / dstH
-
-		for x := 0; x < dstWCells; x++ {
-			srcX := x * srcW / dstWCells
-
-			if cells[srcY][srcX] {
+	for y := 0; y < viewportH; y++ {
+		row := cells[startY+y]
+		for x := 0; x < viewportW; x++ {
+			if row[startX+x] {
 				b.WriteString("██")
 			} else {
 				b.WriteString("  ")
 			}
 		}
-
-		if y != dstH-1 {
+		if y != viewportH-1 {
 			b.WriteByte('\n')
 		}
 	}
-
 	return b.String()
 }

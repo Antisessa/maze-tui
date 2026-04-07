@@ -15,8 +15,8 @@ type GenerateParams struct {
 
 func OpenCaveCmd(storage shared.CaveStorage, path string) tea.Cmd {
 	return func() tea.Msg {
-		if storage.Open == nil {
-			return ErrorMsg{Err: fmt.Errorf("storage.Open is nil")}
+		if storage == nil {
+			return ErrorMsg{Err: fmt.Errorf("storage is nil")}
 		}
 
 		c, err := storage.Open(path)
@@ -33,8 +33,8 @@ func OpenCaveCmd(storage shared.CaveStorage, path string) tea.Cmd {
 
 func GenerateAndSaveCmd(storage shared.CaveStorage, path string, p GenerateParams) tea.Cmd {
 	return func() tea.Msg {
-		if storage.Save == nil {
-			return ErrorMsg{Err: fmt.Errorf("storage.Save is nil")}
+		if storage == nil {
+			return ErrorMsg{Err: fmt.Errorf("storage is nil")}
 		}
 
 		c, err := domain.InitCave(p.Chance, p.Birth, p.Death, p.Rows, p.Cols)
